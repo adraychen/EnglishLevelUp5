@@ -4,6 +4,7 @@ import tempfile
 import base64
 import random
 import streamlit as st
+import streamlit.components.v1 as components
 from groq import Groq
 from gtts import gTTS
 from crewai import Agent, Task, Crew, Process
@@ -117,16 +118,109 @@ def autoplay_audio(b64: str):
         unsafe_allow_html=True,
     )
 
+# ── Review component ──────────────────────────────────────────────────────────
+def render_review_component(speeches: list[str], comments: list[str], comment_audios: list[str]):
+    """
+    Self-contained HTML component that handles the full review flow.
+    Each card shows the user's speech + comment text.
+    Clicking 'Hear comment' plays the audio within the same gesture — reliable across all browsers.
+    Clicking 'Next' advances the card.
+    """
+    # Serialize data safely for JS
+    import json
+    speeches_js  = json.dumps(speeches)
+    comments_js  = json.dumps(comments)
+    audios_js    = json.dumps(comment_audios)
+    total        = len(speeches)
+
+    html = f"""
+    <style>
+      * {{ box-sizing: border-box; font-family: sans-serif; }}
+      body {{ margin: 0; padding: 12px; background: transparent; }}
+      .card {{ background: #f8f9fa; border-radius: 10px; padding: 20px; margin-bottom: 12px; border: 1px solid #dee2e6; }}
+      .label {{ font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; margin-bottom: 4px; }}
+      .speech {{ font-size: 15px; color: #212529; margin-bottom: 14px; line-height: 1.5; }}
+      .comment {{ font-size: 15px; color: #0d6efd; line-height: 1.5; margin-bottom: 16px; }}
+      .progress {{ font-size: 12px; color: #6c757d; margin-bottom: 14px; }}
+      .btn {{ display: inline-block; padding: 9px 20px; border-radius: 7px; border: none;
+              font-size: 14px; font-weight: 500; cursor: pointer; margin-right: 8px; }}
+      .btn-primary {{ background: #0d6efd; color: white; }}
+      .btn-primary:hover {{ background: #0b5ed7; }}
+      .btn-secondary {{ background: #e9ecef; color: #495057; }}
+      .btn-secondary:hover {{ background: #dee2e6; }}
+      .done {{ background: #d1e7dd; border-radius: 10px; padding: 16px 20px; font-size: 15px; color: #0a3622; }}
+    </style>
+
+    <div id="app"></div>
+
+    <script>
+    const speeches = {speeches_js};
+    const comments = {comments_js};
+    const audios   = {audios_js};
+    const total    = {total};
+    let current    = 0;
+    let playing    = false;
+
+    function render() {{
+      const app = document.getElementById('app');
+      if (current >= total) {{
+        app.innerHTML = `
+          <div class="done">
+            ✅ Review complete! Great work today.<br>
+            <small>Click <strong>🔄 New topic</strong> below to start a new conversation.</small>
+          </div>`;
+        return;
+      }}
+
+      app.innerHTML = `
+        <div class="progress">Comment ${{current + 1}} of ${{total}}</div>
+        <div class="card">
+          <div class="label">You said</div>
+          <div class="speech">${{speeches[current]}}</div>
+          <div class="label">Fluency feedback</div>
+          <div class="comment">${{comments[current]}}</div>
+          <button class="btn btn-primary" onclick="playComment()" id="play-btn">🔊 Hear comment</button>
+          <button class="btn btn-secondary" onclick="nextCard()"
+            id="next-btn">${{current + 1 < total ? 'Next comment ▶' : 'Finish review ✓'}}</button>
+        </div>`;
+    }}
+
+    function playComment() {{
+      if (playing) return;
+      playing = true;
+      document.getElementById('play-btn').textContent = '🔊 Playing...';
+      const audio = new Audio('data:audio/mp3;base64,' + audios[current]);
+      audio.onended = () => {{
+        playing = false;
+        const btn = document.getElementById('play-btn');
+        if (btn) btn.textContent = '🔊 Hear comment';
+      }};
+      audio.play();
+    }}
+
+    function nextCard() {{
+      current++;
+      render();
+    }}
+
+    // Auto-play first comment on load
+    render();
+    setTimeout(() => {{ playComment(); }}, 400);
+    </script>
+    """
+    components.html(html, height=320, scrolling=False)
+
 # ── Session state ─────────────────────────────────────────────────────────────
 if "topic"          not in st.session_state: st.session_state.topic          = random.choice(TOPICS)
 if "messages"       not in st.session_state: st.session_state.messages       = []
+if "speeches"       not in st.session_state: st.session_state.speeches       = []
 if "comments"       not in st.session_state: st.session_state.comments       = []
 if "turn_count"     not in st.session_state: st.session_state.turn_count     = 0
 if "audio_enabled"  not in st.session_state: st.session_state.audio_enabled  = True
 if "pending_audio"  not in st.session_state: st.session_state.pending_audio  = None
 if "started"        not in st.session_state: st.session_state.started        = False
 if "finished"       not in st.session_state: st.session_state.finished       = False
-if "review_index"   not in st.session_state: st.session_state.review_index   = 0  # which comment to play next
+if "comment_audios" not in st.session_state: st.session_state.comment_audios = []
 
 topic = st.session_state.topic
 
@@ -154,43 +248,28 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Play single pending audio ─────────────────────────────────────────────────
+# ── Play single pending audio (questions only) ────────────────────────────────
 if st.session_state.audio_enabled and st.session_state.pending_audio:
     autoplay_audio(st.session_state.pending_audio)
     st.session_state.pending_audio = None
 
-# ── FINISHED: review mode ─────────────────────────────────────────────────────
+# ── FINISHED: render review component ────────────────────────────────────────
 if st.session_state.finished:
-    comments = st.session_state.comments
-    review_index = st.session_state.review_index
-    total = len(comments)
-
     st.markdown("---")
+    st.markdown("### 📝 Fluency Review")
+    st.caption("Press **🔊 Hear comment** to listen. Press **Next comment** to advance.")
 
-    if review_index < total:
-        # Currently playing a comment
-        current_comment = comments[review_index]
-        st.info(f"**Comment {review_index + 1} of {total}:** {current_comment}")
+    render_review_component(
+        st.session_state.speeches,
+        st.session_state.comments,
+        st.session_state.comment_audios,
+    )
 
-        # Autoplay this comment
-        if st.session_state.audio_enabled:
-            autoplay_audio(make_audio_b64(f"Comment {review_index + 1}. {current_comment}"))
-
-        # Button to advance to next comment
-        btn_label = "Next comment ▶" if review_index + 1 < total else "Finish review ✓"
-        if st.button(btn_label, type="primary", use_container_width=False):
-            st.session_state.review_index += 1
-            st.rerun()
-
-    else:
-        # All comments played
-        st.success("✅ Review complete! Great work today.")
-        if st.button("🔄 New topic", type="primary"):
-            for key in ["topic", "messages", "comments", "turn_count",
-                        "pending_audio", "started", "finished", "review_index"]:
-                del st.session_state[key]
-            st.rerun()
-
+    if st.button("🔄 New topic", type="primary"):
+        for key in ["topic", "messages", "speeches", "comments", "turn_count",
+                    "pending_audio", "started", "finished", "comment_audios"]:
+            del st.session_state[key]
+        st.rerun()
     st.stop()
 
 # ── Progress ──────────────────────────────────────────────────────────────────
@@ -223,11 +302,16 @@ def handle_answer(user_text: str):
     with st.spinner("Thinking..."):
         comment, question = get_response(user_text, st.session_state.messages, topic["name"])
 
+    # Save speech + comment + pre-generate audio for review
+    st.session_state.speeches.append(user_text)
     st.session_state.comments.append(comment)
+    st.session_state.comment_audios.append(make_audio_b64(comment))
+
+    # Show comment as text in chat
     st.session_state.messages.append({"role": "assistant", "content": f"💬 {comment}"})
 
     if is_last:
-        closing = "Great conversation! Now let's go through your fluency feedback."
+        closing = "Great conversation! Here's your fluency review."
         st.session_state.messages.append({"role": "assistant", "content": closing})
         st.session_state.pending_audio = make_audio_b64(closing)
         st.session_state.finished = True
