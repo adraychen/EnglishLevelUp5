@@ -140,7 +140,7 @@ def render_review_component(speeches: list[str], comments: list[str], comment_au
       .card {{ background: #f8f9fa; border-radius: 10px; padding: 20px; margin-bottom: 12px; border: 1px solid #dee2e6; }}
       .label {{ font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; margin-bottom: 4px; }}
       .speech {{ font-size: 15px; color: #212529; margin-bottom: 14px; line-height: 1.5; }}
-      .comment {{ font-size: 15px; color: #0d6efd; line-height: 1.5; margin-bottom: 16px; }}
+      .comment {{ font-size: 15px; color: #212529; line-height: 1.5; margin-bottom: 16px; }}
       .progress {{ font-size: 12px; color: #6c757d; margin-bottom: 14px; }}
       .btn {{ display: inline-block; padding: 9px 20px; border-radius: 7px; border: none;
               font-size: 14px; font-weight: 500; cursor: pointer; margin-right: 8px; }}
@@ -203,9 +203,7 @@ def render_review_component(speeches: list[str], comments: list[str], comment_au
       render();
     }}
 
-    // Auto-play first comment on load
     render();
-    setTimeout(() => {{ playComment(); }}, 400);
     </script>
     """
     components.html(html, height=320, scrolling=False)
