@@ -1,7 +1,6 @@
 import os
 import io
 import base64
-import random
 import tempfile
 import time
 from dotenv import load_dotenv
@@ -36,25 +35,80 @@ login_manager.login_view = "login"
 
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+# First 5 topics (assessment sessions, level 2 — used for all students regardless of score)
+# Sessions 6+: adaptive topics grouped by level
 TOPICS = [
-    {"name": "At a coffee shop",          "opening": "I just tried that new cafe on the corner. Have you been there yet?"},
-    {"name": "Weekend plans",             "opening": "So what are you up to this weekend? Got anything fun planned?"},
-    {"name": "Talking about the weather", "opening": "Can you believe how hot it has been lately? Is it like this where you live?"},
-    {"name": "Recommending a restaurant", "opening": "I had the most amazing dinner last night. Do you have a favourite restaurant around here?"},
-    {"name": "Talking about a movie",     "opening": "I watched a really good movie last night. Have you seen anything good recently?"},
-    {"name": "Monday morning small talk", "opening": "Hey, how was your weekend? Do anything interesting?"},
-    {"name": "Talking about a hobby",     "opening": "I have been trying to get into running lately. Do you have any hobbies you are really into?"},
-    {"name": "Planning a trip",           "opening": "I am thinking about taking a trip somewhere next month. Have you travelled anywhere nice lately?"},
-    {"name": "Talking about food",        "opening": "I have been trying to cook more at home. Do you enjoy cooking?"},
-    {"name": "Catching up with a friend", "opening": "It feels like we have not talked in ages! What have you been up to lately?"},
-    {"name": "Talking about work",        "opening": "Work has been so busy for me lately. How about you, are things busy at your end?"},
-    {"name": "Talking about a TV show",   "opening": "I just finished watching a really good series. Are you watching anything good right now?"},
-    {"name": "Shopping",                  "opening": "I went to the mall yesterday and it was packed! Do you enjoy shopping?"},
-    {"name": "Health and exercise",       "opening": "I have been trying to go to the gym more regularly. Do you exercise much?"},
-    {"name": "Talking about pets",        "opening": "My neighbour just got a puppy and it is so cute! Do you have any pets?"},
+    # Assessment topics (sessions 1-5) - level 2 for all students
+    {"name": "Monday morning small talk", "opening": "Hey, how was your weekend? Do anything interesting?", "level": 2},
+    {"name": "Talking about food", "opening": "I have been trying to cook more at home. Do you enjoy cooking?", "level": 2},
+    {"name": "Talking about a hobby", "opening": "I have been trying to get into running lately. Do you have any hobbies you are really into?", "level": 2},
+    {"name": "Talking about work", "opening": "Work has been so busy for me lately. How about you, are things busy at your end?", "level": 2},
+    {"name": "Talking about a TV show", "opening": "I just finished watching a really good series. Are you watching anything good right now?", "level": 2},
+    # Level 1-3 (Beginner)
+    {"name": "Talking about pets", "opening": "My neighbour just got a puppy and it is so cute! Do you have any pets?", "level": 1},
+    {"name": "At a coffee shop", "opening": "I just tried that new cafe on the corner. Have you been there yet?", "level": 1},
+    {"name": "Talking about the weather", "opening": "Can you believe how hot it has been lately? Is it like this where you live?", "level": 1},
+    # Level 4-6 (Developing/Intermediate)
+    {"name": "Recommending a restaurant", "opening": "I had the most amazing dinner last night. Do you have a favourite restaurant around here?", "level": 4},
+    {"name": "Weekend plans", "opening": "So what are you up to this weekend? Got anything fun planned?", "level": 4},
+    {"name": "Shopping", "opening": "I went to the mall yesterday and it was packed! Do you enjoy shopping?", "level": 4},
+    {"name": "Health and exercise", "opening": "I have been trying to go to the gym more regularly. Do you exercise much?", "level": 4},
+    {"name": "Catching up with a friend", "opening": "It feels like we have not talked in ages! What have you been up to lately?", "level": 4},
+    # Level 7-9 (Fluent)
+    {"name": "Planning a trip", "opening": "I am thinking about taking a trip somewhere next month. Have you travelled anywhere nice lately?", "level": 7},
+    {"name": "Talking about a movie", "opening": "I watched a really good movie last night. Have you seen anything good recently?", "level": 7},
 ]
 
 MAX_TURNS = 5
+
+
+def get_student_level(user_id: int) -> int:
+    """Get student's current level from latest session analysis. Returns 5 (mid-level) as default."""
+    latest_analysis = (SessionAnalysis.query
+        .join(DBSession)
+        .filter(DBSession.user_id == user_id)
+        .order_by(SessionAnalysis.id.desc())
+        .first())
+    if latest_analysis and latest_analysis.overall_score:
+        return int(round(latest_analysis.overall_score))
+    return 5  # default mid-level
+
+
+def get_next_topic(user_id: int) -> dict:
+    """
+    Returns the next topic for a student.
+    - Sessions 1-5: return topics[0] through topics[4] in order (assessment, level 2)
+    - Sessions 6+: pick the first unused topic whose level <= student's current level
+    - If all topics used, cycle back through adaptive topics only (index 5+)
+    - Falls back to a random adaptive topic if nothing matches
+    """
+    session_count = DBSession.query.filter_by(user_id=user_id).count()
+
+    # Sessions 1-5: return assessment topics in order
+    if session_count < 5:
+        return TOPICS[session_count]
+
+    # Sessions 6+: adaptive topic selection
+    student_level = get_student_level(user_id)
+
+    # Get list of topic names already used
+    used_topics = [s.topic for s in DBSession.query.filter_by(user_id=user_id).all()]
+
+    # Adaptive topics are index 5 onwards
+    adaptive_topics = TOPICS[5:]
+
+    # Find first unused topic where level <= student_level
+    for topic in adaptive_topics:
+        if topic["level"] <= student_level and topic["name"] not in used_topics:
+            return topic
+
+    # If all matching topics used, cycle back through adaptive topics (ignore used check)
+    for topic in adaptive_topics:
+        if topic["level"] <= student_level:
+            return topic
+
+    # Fallback: return first adaptive topic
+    return adaptive_topics[0] if adaptive_topics else TOPICS[0]
 
 # Create tables on startup
 with app.app_context():
@@ -186,12 +240,14 @@ def student_detail(student_id):
 @app.route("/chat")
 @login_required
 def chat():
-    topic = random.choice(TOPICS)
+    topic = get_next_topic(current_user.id)
+    student_level = get_student_level(current_user.id)
     session["topic_name"]    = topic["name"]
     session["topic_opening"] = topic["opening"]
     session["turns"]         = []
     session["turn_count"]    = 0
     session["history"]       = []
+    session["student_level"] = student_level
     return render_template("chat.html",
                            topic=topic["name"],
                            opening=topic["opening"],
@@ -211,9 +267,12 @@ def chat_respond():
     turns         = session.get("turns", [])
     last_question = data.get("last_question", "")
 
+    # Get student level from session (looked up once per chat)
+    student_level = session.get("student_level", 5)
+
     # agent now returns (comment, suggestion, question)
     comment, suggestion, question = get_conversation_response(
-        student_text, history, topic_name
+        student_text, history, topic_name, student_level
     )
 
     # Store turn — suggestion saved directly, no parsing needed later

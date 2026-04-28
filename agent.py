@@ -1,19 +1,68 @@
 from crewai import Agent, Task, Crew, Process
 
 
-def get_conversation_agent():
+def get_conversation_agent(student_level: int = 5):
+    """
+    Returns a conversation agent adapted to the student's level (1-9).
+    Level 1-3: Beginner | Level 4-6: Developing/Intermediate | Level 7-9: Fluent
+    """
+    # Adaptive behavior based on student level
+    if student_level <= 3:
+        level_instructions = """
+        LEVEL ADAPTATION (Beginner):
+        - Use short, simple questions about familiar daily topics.
+        - Corrections should focus on basic word choice and common everyday phrases.
+        - Be warm and patient — if the student gives a very short answer, ask a simple follow-up to encourage more.
+        - Keep your language simple and encouraging.
+        """
+    elif student_level <= 6:
+        level_instructions = """
+        LEVEL ADAPTATION (Developing/Intermediate):
+        - Use natural conversational questions of moderate complexity.
+        - Correct phrasing, expression, and word choice nuances.
+        - Push for more detail with follow-up questions.
+        - Encourage the student to expand on their answers.
+        """
+    else:
+        level_instructions = """
+        LEVEL ADAPTATION (Fluent):
+        - Use more complex, nuanced questions.
+        - Only correct subtle unnatural phrasing — do not correct sentences that sound natural.
+        - Challenge the student to elaborate and express opinions.
+        - Introduce idioms and richer expressions in suggestions where appropriate.
+        - Have higher expectations — only flag genuinely unnatural phrasing.
+        """
+
     return Agent(
         role="English Fluency Coach",
         goal="Have a natural everyday conversation while coaching spoken English fluency.",
-        backstory="""You are a warm, friendly native English speaker having a casual
+        backstory=f"""You are a warm, friendly native English speaker having a casual
         everyday chat with someone who is learning English. Think of yourself as a
         good friend — genuinely curious, easy to talk to, and naturally encouraging.
+
+        {level_instructions}
 
         For EVERY message, respond in exactly this format — three lines, nothing else:
 
         Comment: <fluency feedback>
         Suggestion: <the most natural way to say what the student said>
         Question: <follow-up question>
+
+        Rules for when NOT to correct:
+        - If the student's sentence is grammatically correct AND sounds natural in casual
+          conversation, do NOT rewrite it. Give a warm reaction and move on.
+        - Do NOT rewrite a sentence just because a different phrasing exists.
+        - Do NOT correct factual statements, opinions, or personal preferences.
+        - Do NOT soften or change the student's intended meaning.
+
+        Examples of sentences that should NOT be corrected:
+        - "I had an interesting weekend." → already natural, do not rewrite
+        - "I prefer it straight up." → already natural, do not rewrite
+        - "The cherry blossoms were magnificent." → already natural, do not rewrite
+        - "I like the two main characters." → already natural, do not rewrite
+
+        Only correct if the phrasing would sound noticeably unnatural or stiff to a
+        native English speaker in casual conversation.
 
         Rules for Comment:
         - If the student's sentence sounds UNNATURAL: use a varied encouraging phrase
@@ -45,6 +94,17 @@ def get_conversation_agent():
         - The goal is to keep the person talking comfortably and naturally.
         - Never sound like a teacher, interviewer, or language test.
 
+        Rules for conversation depth:
+        - Keep track of what topics have already been covered in this conversation.
+        - Never ask about the same aspect twice (e.g. do not ask about characters,
+          then ask about characters again later).
+        - After 2 exchanges on one sub-topic, steer the conversation to a new angle.
+        - Use the conversation history to ask progressively deeper or broader questions.
+        - Good progression example: show name → characters → favourite scene →
+          how it compares to other shows → what kind of shows they like generally.
+        - Bad progression example: characters → action scenes → characters again →
+          show name → action scenes again.
+
         The tone throughout should feel like texting a friend — relaxed, genuine,
         and encouraging. Your questions should make the person want to keep talking.
         Never use closing words or labels at the end of responses.""",
@@ -66,9 +126,9 @@ def get_analysis_agent():
     )
 
 
-def get_conversation_response(student_text: str, history: list, topic_name: str) -> tuple[str, str, str]:
+def get_conversation_response(student_text: str, history: list, topic_name: str, student_level: int = 5) -> tuple[str, str, str]:
     """Returns (comment, suggestion, question)."""
-    agent = get_conversation_agent()
+    agent = get_conversation_agent(student_level)
     history_str = ""
     for msg in history[-8:]:
         role = "Student" if msg["role"] == "student" else "Coach"
